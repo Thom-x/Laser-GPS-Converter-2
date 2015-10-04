@@ -82,7 +82,10 @@ namespace Laser_GPS_Converter_2
             {
                 //Pretty print some details for each track to make them more easily identifiable
                 //100000 factor worked out from checking the length of a known gpx record
-                string l = dra[i][2] + ": " + dra[i][3].ToString().TrimEnd(' ') + " (" + Math.Round(Convert.ToDouble(dra[i][13]) / 100000, 2) + " km)";
+                string l = dra[i][2] + ": " + dra[i][3].ToString().TrimEnd(' ');
+                string dist = dra[i][13].ToString().Trim(' ');
+                if (dist != "")
+                    l += " (" + Math.Round(Convert.ToDouble(dist) / 100000, 2) + " km)";
                 list_Tracks.Items.Add(l);
             }
         }
@@ -369,8 +372,8 @@ namespace Laser_GPS_Converter_2
 
 			txt_Details.Clear();
 			DataRow dr = tracks.Tables[0].Rows[i];
-			txt_Details.AppendText("Started: " + dr[3].ToString().Trim());
-			txt_Details.AppendText(Environment.NewLine + "Ended:   " + dr[5].ToString().Trim());
+			txt_Details.AppendText("Started:" + Environment.NewLine + dr[3].ToString().Trim());
+			txt_Details.AppendText(Environment.NewLine + "Ended:" + Environment.NewLine + dr[5].ToString().Trim());
 			txt_Details.AppendText(Environment.NewLine);
 
 			DateTime t1 = ParseDate(dr, 3);
@@ -378,7 +381,10 @@ namespace Laser_GPS_Converter_2
 			TimeSpan duration = t2 - t1;
 			txt_Details.AppendText(Environment.NewLine + "Duration: " + duration.ToString());
 
-			txt_Details.AppendText(Environment.NewLine + "Distance: " + (Convert.ToDouble(dr[13]) / 100).ToString("n0") + " m");
+            if (dr[13].ToString().Trim(' ') != "")
+                txt_Details.AppendText(Environment.NewLine + "Distance: " + (Convert.ToDouble(dr[13]) / 100).ToString("n0") + " m");
+            else
+                txt_Details.AppendText(Environment.NewLine + "Distance: Unknown");
 		}
 
         //Converts the DB-stored datetime to a usable one
