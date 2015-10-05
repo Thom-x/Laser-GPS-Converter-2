@@ -22,16 +22,16 @@ namespace Laser_GPS_Converter_2.Config
             _exportPath = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         }
 
-        private String _dbPath;
-        private String _exportPath;
+        private string _dbPath;
+        private string _exportPath;
 
-        public String DbPath
+        public string DbPath
         {
             get { return _dbPath; }
             set { _dbPath = value; }
         }
 
-        public String ExportPath
+        public string ExportPath
         {
             get { return _exportPath; }
             set { _exportPath = value; }

@@ -4,11 +4,9 @@ using MaterialSkin.Controls;
 using System;
 using System.Data;
 using System.Data.OleDb;
-using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using System.Xml;
-using System.Yaml;
-using System.Yaml.Serialization;
 
 
 namespace Laser_GPS_Converter_2
@@ -17,8 +15,11 @@ namespace Laser_GPS_Converter_2
     public partial class Form1 : MaterialForm
 	{
 		DataSet tracks;
+        int remainingExports = 0;
+        double loading = 0;
+        private double loadingMax;
 
-		public Form1()
+        public Form1()
 		{
 			InitializeComponent();
             var materialSkinManager = MaterialSkinManager.Instance;
@@ -34,7 +35,8 @@ namespace Laser_GPS_Converter_2
 
 		private void Form_Load(object sender, EventArgs e)
 		{
-			SetOffsetDefault();
+            updateRemainingExports();
+            SetOffsetDefault();
 		}
 
 
@@ -85,7 +87,9 @@ namespace Laser_GPS_Converter_2
                 string l = dra[i][2] + ": " + dra[i][3].ToString().TrimEnd(' ');
                 string dist = dra[i][13].ToString().Trim(' ');
                 if (dist != "")
+                {
                     l += " (" + Math.Round(Convert.ToDouble(dist) / 100000, 2) + " km)";
+                }
                 list_Tracks.Items.Add(l);
             }
         }
@@ -149,7 +153,7 @@ namespace Laser_GPS_Converter_2
 					int[] cNumbers = new int[list_Tracks.SelectedIndices.Count];
 					for (int i = 0; i < list_Tracks.SelectedItems.Count; i++)
 					{
-						cNumbers[i] = Int32.Parse(list_Tracks.SelectedItems[i].ToString().Substring(0, list_Tracks.SelectedItems[i].ToString().IndexOf(':')));
+						cNumbers[i] = int.Parse(list_Tracks.SelectedItems[i].ToString().Substring(0, list_Tracks.SelectedItems[i].ToString().IndexOf(':')));
 					}
 					ExportTracks(cNumbers, n_Offset.Value);
 				}
@@ -167,39 +171,91 @@ namespace Laser_GPS_Converter_2
                 int[] cNumbers = new int[list_Tracks.Items.Count];
                 for (int i = 0; i < list_Tracks.Items.Count; i++)
                 {
-                    cNumbers[i] = Int32.Parse(list_Tracks.Items[i].ToString().Substring(0, list_Tracks.Items[i].ToString().IndexOf(':')));
+                    cNumbers[i] = int.Parse(list_Tracks.Items[i].ToString().Substring(0, list_Tracks.Items[i].ToString().IndexOf(':')));
                 }
                 ExportAllTracks(cNumbers, n_Offset.Value);
             }
         }
 
+        private void disableWindow(bool state)
+        {
+            label2.Visible = !state;
+            progressBar1.Visible = !state;
+            materialFlatButton1.Enabled = state;
+            materialFlatButton2.Enabled = state;
+            materialFlatButton3.Enabled = state;
+            n_Offset.Enabled =!state;
+        }
+
+        private void updateRemainingExports()
+        {
+            MethodInvoker inv = delegate
+            {
+                if (remainingExports == 0)
+                {
+                    progressBar1.Value = 0;
+                    disableWindow(true);
+                } else {
+                    label2.Text = "Remaining tracks: " + remainingExports;
+                    float ratio = 100F / (float)loadingMax;
+                    progressBar1.Value = 100 - (int)(ratio * loading);
+                    disableWindow(false);
+                }
+            };
+            Invoke(inv);
+
+        }
+
+        private void startExport()
+        {
+            MethodInvoker inv = delegate
+            {
+                disableWindow(true);
+            };
+            Invoke(inv);
+
+        }
+
+        private void initiateLoading(int[] t)
+        {
+            startExport();
+            remainingExports += t.Length;
+            loadingMax += (loading += GetTrackPointsCount(t));
+            updateRemainingExports();
+        }
+
         //Outputs the list of coordinates and other necessary data to a GPX file
         //Uses XMLWriter instead of the first version which was entirely appending strings manually
         //Probably not very efficient either, but it's still fast enough
-		private void ExportTracks(int[] t, decimal offset)
+        private async void ExportTracks(int[] t, decimal offset)
 		{
-			XmlWriterSettings xs = new XmlWriterSettings();
-			xs.Indent = true;
-			xs.NamespaceHandling = NamespaceHandling.OmitDuplicates;
+            await Task.Run(() =>
+            {
+                initiateLoading(t);
+                XmlWriterSettings xs = new XmlWriterSettings();
+                xs.Indent = true;
+                xs.NamespaceHandling = NamespaceHandling.OmitDuplicates;
 
-			XmlWriter writer = XmlWriter.Create(saveFileDialog1.FileName, xs);
-			
-			writer.WriteStartDocument();
-            WriteGPXHeader(writer);
+                int k = -1;
+                foreach (int i in t)
+                {
+                    k++;
+                    string fileName = saveFileDialog1.FileName.Substring(0, saveFileDialog1.FileName.Length - 4) + ((k == 0) ? "" : ("-" + k)) + ".gpx";
+                    XmlWriter writer = XmlWriter.Create(fileName, xs);
+                    writer.WriteStartDocument();
+                    WriteGPXHeader(writer);
+                    DataSet trackPoints = GetTrackPoints(i);
+                    DataRowCollection dra = trackPoints.Tables["TrackPoint"].Rows;
 
-			foreach (int i in t)
-			{
-				DataSet trackPoints = GetTrackPoints(i);
-				DataRowCollection dra = trackPoints.Tables["TrackPoint"].Rows;
+                    WriteGPX(writer, dra, offset);
+                    writer.WriteEndDocument();
+                    writer.Close();
+                }
+            });
 
-                WriteGPX(writer, dra, offset);
-			}
-
-			writer.WriteEndDocument();
-			writer.Close();
 		}
 
-        private void ExportAllTracks(int[] t, decimal offset)
+        private async void ExportAllTracks(int[] t, decimal offset)
         {
             folderBrowserDialog1.SelectedPath = ConfigYaml.Instance.Properties.ExportPath;
             DialogResult result = folderBrowserDialog1.ShowDialog();
@@ -212,34 +268,37 @@ namespace Laser_GPS_Converter_2
             ConfigYaml.Instance.Properties.ExportPath = folderBrowserDialog1.SelectedPath;
             ConfigYaml.Instance.Update();
 
-            DataRowCollection draG = tracks.Tables["TrackPoint1"].Rows;
-            int k = -1;
-            foreach (int i in t)
+            await Task.Run(() =>
             {
-                k++;
-                //Pretty print some details for each track to make them more easily identifiable
-                //100000 factor worked out from checking the length of a known gpx record
-                string fileName = draG[k][3].ToString().TrimEnd(' ').Replace(":", "-");
+                initiateLoading(t);
+                DataRowCollection draG = tracks.Tables["TrackPoint1"].Rows;
+                int k = -1;
+                foreach (int i in t)
+                {
+                    k++;
+                    //Pretty print some details for each track to make them more easily identifiable
+                    //100000 factor worked out from checking the length of a known gpx record
+                    string fileName = draG[k][3].ToString().TrimEnd(' ').Replace(":", "-");
 
-                XmlWriterSettings xs = new XmlWriterSettings();
-                xs.Indent = true;
-                xs.NamespaceHandling = NamespaceHandling.OmitDuplicates;
+                    XmlWriterSettings xs = new XmlWriterSettings();
+                    xs.Indent = true;
+                    xs.NamespaceHandling = NamespaceHandling.OmitDuplicates;
 
-                XmlWriter writer = XmlWriter.Create(folderBrowserDialog1.SelectedPath + "\\" + fileName + ".gpx", xs);
+                    XmlWriter writer = XmlWriter.Create(folderBrowserDialog1.SelectedPath + "\\" + fileName + ".gpx", xs);
 
+                    writer.WriteStartDocument();
+                    WriteGPXHeader(writer);
 
+                    DataSet trackPoints = GetTrackPoints(i);
+                    DataRowCollection dra = trackPoints.Tables["TrackPoint"].Rows;
 
-                writer.WriteStartDocument();
-                WriteGPXHeader(writer);
+                    WriteGPX(writer, dra, offset);
 
-                DataSet trackPoints = GetTrackPoints(i);
-                DataRowCollection dra = trackPoints.Tables["TrackPoint"].Rows;
+                    writer.WriteEndDocument();
+                    writer.Close();
+                }
+            });
 
-                WriteGPX(writer, dra, offset);
-
-                writer.WriteEndDocument();
-                writer.Close();
-            }
         }
 
         private void WriteGPXHeader(XmlWriter writer)
@@ -261,6 +320,8 @@ namespace Laser_GPS_Converter_2
 
             foreach (DataRow dr in dra)
             {
+                loading--;
+                updateRemainingExports();
                 writer.WriteStartElement("trkpt");
                 //latitude
                 if (dr[5].ToString().Trim().Equals("N"))
@@ -279,9 +340,9 @@ namespace Laser_GPS_Converter_2
                 timebits = dr[1].ToString().Trim().Split(':');
                 for (int j = 0; j < 3; j++)
                 {
-                    timebits[j] = Int32.Parse(timebits[j]).ToString("D2");
+                    timebits[j] = int.Parse(timebits[j]).ToString("D2");
                 }
-                string dt = dr[0].ToString().Substring(0, 10) + 'T' + String.Join(":", timebits);
+                string dt = dr[0].ToString().Substring(0, 10) + 'T' + string.Join(":", timebits);
                 dt += offset > 0 ? '+' : '-';
                 dt += ((int)offset).ToString("D2") + ':';
                 dt += (offset - (int)offset == 0 ? "00" : "30");
@@ -308,9 +369,10 @@ namespace Laser_GPS_Converter_2
                 }
                 writer.WriteEndElement();
             }
-
             writer.WriteEndElement();
             writer.WriteEndElement();
+            remainingExports--;
+            updateRemainingExports();
         }
 
         //More 'borrowed' boilerplate code to access databases
@@ -356,11 +418,65 @@ namespace Laser_GPS_Converter_2
 			return t;
 		}
 
-		private void list_Tracks_SelectedIndexChanged(object sender, EventArgs e)
+        private int GetTrackPointsCount(int[] cNumbers)
+        {
+            int rowsCount = 0;
+            string strAccessConn = @"Provider=Microsoft.JET.OLEDB.4.0;Data Source=" + ConfigYaml.Instance.Properties.DbPath + "; Jet OLEDB:Database Password=danger";
+            OleDbConnection myAccessConn = null;
+            try
+            {
+                myAccessConn = new OleDbConnection(strAccessConn);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: Failed to create a database connection. \n{0}", ex.Message);
+            }
+
+            try
+            {
+               myAccessConn.Open();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: Failed to connect to database. \n{0}", ex.Message);
+            }
+
+            foreach (int i in cNumbers)
+            {
+                //Gets rows count
+                string strAccessSelect = "SELECT count(*) as RowCount FROM TrackPoint, TrackPoint1 WHERE (((TrackPoint.cNumber)=[TrackPoint1].[cNumber]) AND ((TrackPoint1.cNumber)=" + i + "));";
+                try
+                {
+                    OleDbCommand myAccessCommand = new OleDbCommand(strAccessSelect, myAccessConn);
+                    OleDbDataReader dbReader = myAccessCommand.ExecuteReader();
+                    dbReader.Read();
+                    rowsCount += (int)dbReader["RowCount"];
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("Error: Failed to retrieve the required data from the DataBase.\n{0}", ex.Message);
+                }
+            }
+
+            try
+            {
+                myAccessConn.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Error: Failed to close database. \n{0}", ex.Message);
+            }
+
+            return rowsCount;
+        }
+
+        private void list_Tracks_SelectedIndexChanged(object sender, EventArgs e)
         {
             if (list_Tracks.SelectedItems.Count > 0)
-			    UpdateTrackDetails();
-		}
+            {
+                UpdateTrackDetails();
+            }
+        }
 
         //Shows more specific details about a selected track
 		private void UpdateTrackDetails()
@@ -372,8 +488,8 @@ namespace Laser_GPS_Converter_2
 
 			txt_Details.Clear();
 			DataRow dr = tracks.Tables[0].Rows[i];
-			txt_Details.AppendText("Started:" + Environment.NewLine + dr[3].ToString().Trim());
-			txt_Details.AppendText(Environment.NewLine + "Ended:" + Environment.NewLine + dr[5].ToString().Trim());
+			txt_Details.AppendText("Started: " + dr[3].ToString().Trim());
+			txt_Details.AppendText(Environment.NewLine + "Ended: " + dr[5].ToString().Trim());
 			txt_Details.AppendText(Environment.NewLine);
 
 			DateTime t1 = ParseDate(dr, 3);
@@ -382,10 +498,12 @@ namespace Laser_GPS_Converter_2
 			txt_Details.AppendText(Environment.NewLine + "Duration: " + duration.ToString());
 
             if (dr[13].ToString().Trim(' ') != "")
+            {
                 txt_Details.AppendText(Environment.NewLine + "Distance: " + (Convert.ToDouble(dr[13]) / 100).ToString("n0") + " m");
-            else
+            } else {
                 txt_Details.AppendText(Environment.NewLine + "Distance: Unknown");
-		}
+            }
+        }
 
         //Converts the DB-stored datetime to a usable one
 		private DateTime ParseDate(DataRow dr, int i)
